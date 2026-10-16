@@ -1,0 +1,1333 @@
+<!doctype html>
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Raumklima">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f3f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>Raumklima</title>
+<!--
+  Raumklima-App (Etappe 11)
+  ==========================
+  Liest die Datei verlauf.csv, die die Zentrale alle 15 Minuten
+  ins private Repository diyREBEL/raumklima-daten hochlaedt, und
+  zeigt sie als Raumliste und als Verlauf pro Raum.
+
+  Alles steckt in dieser einen Datei: Aussehen (CSS), Aufbau
+  (HTML) und Verhalten (JavaScript). Es werden keine fremden
+  Bibliotheken geladen.
+
+  Der Leseschluessel wird in der App eingetragen und nur auf dem
+  Geraet gespeichert (localStorage). Er steht nirgends im Code -
+  dieses Repository darf deshalb oeffentlich sein.
+-->
+<style>
+  /* ---------- Farben als Variablen: hell ---------- */
+  :root {
+    color-scheme: light;
+    --hintergrund: #f4f3f0;
+    --flaeche:     #fcfcfb;
+    --text:        #0b0b0b;
+    --text-2:      #52514e;
+    --text-3:      #85847f;
+    --raster:      #e6e4df;
+    --rahmen:      #e3e1dc;
+    --temp:        #2b2a28;   /* Temperatur: dunkel, wie auf dem Display */
+    --feuchte:     #e34948;   /* relative Feuchte: rot, wie auf dem Display */
+    --band:        rgba(227, 73, 72, 0.14);
+    --warnung:     #c63b3a;   /* Hintergrund des Warnbands (weisse Schrift) */
+    --warnung-text:#c63b3a;   /* rote Schrift auf heller Flaeche */
+    --akzent:      #2a78d6;
+    --schatten:    0 1px 2px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04);
+  }
+  /* ---------- Farben als Variablen: dunkel ---------- */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --hintergrund: #121211;
+      --flaeche:     #1c1c1b;
+      --text:        #f0efec;
+      --text-2:      #c3c2b7;
+      --text-3:      #8f8e87;
+      --raster:      #2f2f2c;
+      --rahmen:      #2c2c2a;
+      --temp:        #e9e8e3;
+      --feuchte:     #e66767;
+      --band:        rgba(230, 103, 103, 0.21);
+      --warnung:     #b33c3b;
+      --warnung-text:#f08584;
+      --akzent:      #4b93ea;
+      --schatten:    none;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--hintergrund);
+    color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+  button { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  #app {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 24px);
+  }
+
+  /* ---------- Kopfzeile: oben Knoepfe, darunter grosser Titel (wie iOS) ---------- */
+  .kopf { margin-bottom: 10px; }
+  .leiste { display: flex; align-items: center; gap: 4px; min-height: 44px; }
+  .leiste .platz { flex: 1; }
+  .kopf h1 {
+    margin: 0 0 2px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kopf-rechts { display: flex; align-items: center; gap: 2px; }
+  .stand { color: var(--text-3); font-size: 13px; margin-right: 4px; font-variant-numeric: tabular-nums; }
+  .symbol {
+    width: 40px; height: 40px; border: 0; background: none; border-radius: 10px;
+    display: grid; place-items: center; color: var(--text-2); cursor: pointer;
+  }
+  .symbol:active { background: var(--rahmen); }
+  .symbol svg { width: 22px; height: 22px; }
+  .laedt #neuLaden svg { animation: drehen 0.9s linear infinite; }
+  @keyframes drehen { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .laedt #neuLaden svg { animation: none; opacity: 0.5; } }
+  .zurueck {
+    border: 0; background: none; color: var(--akzent); font-size: 17px;
+    padding: 8px 8px 8px 0; cursor: pointer; white-space: nowrap;
+  }
+
+  /* ---------- Hinweise ---------- */
+  .warnung {
+    background: var(--warnung); color: #fff; border-radius: 12px;
+    padding: 10px 14px; margin-bottom: 12px; font-size: 15px; font-weight: 600;
+  }
+  .meldung {
+    background: var(--flaeche); border: 1px solid var(--rahmen); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 12px; font-size: 15px; color: var(--text-2);
+  }
+  .meldung strong { color: var(--text); }
+  .meldung button {
+    margin-top: 8px; border: 0; background: none; color: var(--akzent); padding: 0; cursor: pointer;
+  }
+
+  /* ---------- Raumliste ---------- */
+  .liste { display: grid; gap: 10px; }
+  .karte {
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px;
+    width: 100%; text-align: left; cursor: pointer;
+    background: var(--flaeche); border: 1px solid var(--rahmen); border-radius: 14px;
+    padding: 14px 16px; box-shadow: var(--schatten);
+  }
+  .karte:active { transform: scale(0.99); }
+  .karte .name { font-size: 18px; font-weight: 600; }
+  .karte .werte { text-align: right; font-variant-numeric: tabular-nums; }
+  .karte .temp { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+  .karte .rf { font-size: 17px; color: var(--text-2); margin-left: 10px; }
+  .karte .zeile2 { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 13px; color: var(--text-3); }
+  .karte .keine { font-size: 15px; color: var(--warnung-text); font-weight: 600; }
+  .karte .pfeil { color: var(--text-3); }
+
+  /* ---------- Raumansicht ---------- */
+  .karte-flach {
+    background: var(--flaeche); border: 1px solid var(--rahmen); border-radius: 14px;
+    padding: 12px 12px 10px; box-shadow: var(--schatten); margin-bottom: 12px;
+  }
+  .kopfbereich { position: relative; min-height: 76px; }
+  .jetzt {
+    display: flex; align-items: baseline; gap: 14px; margin: 0 4px 10px; min-height: 40px;
+    font-variant-numeric: tabular-nums;
+  }
+  .jetzt .temp { font-size: 30px; font-weight: 600; }
+  .jetzt .rf { font-size: 18px; color: var(--text-2); }
+  .jetzt .wann { margin-left: auto; font-size: 13px; color: var(--text-3); }
+  .jetzt.leer { align-items: center; }
+  .jetzt .keine { font-size: 15px; color: var(--warnung-text); font-weight: 600; }
+
+  .achsentitel {
+    display: flex; justify-content: space-between; font-size: 12px; color: var(--text-2);
+    margin: 0 2px 4px;
+  }
+  .schluessel { display: inline-flex; align-items: center; gap: 6px; }
+  .linie { display: inline-block; width: 16px; height: 0; border-top: 2px solid; border-radius: 1px; }
+  .linie.temp { border-color: var(--temp); }
+  .linie.rf { border-color: var(--feuchte); }
+  .flaechenmarke { display: inline-block; width: 14px; height: 10px; border-radius: 2px; background: var(--band); }
+
+  .diagramm-huelle { position: relative; }
+  #diagramm { display: block; width: 100%; height: clamp(190px, 32vh, 360px); touch-action: pan-y; }
+  /* Werte unter dem Finger: liegen ueber dem Kopf der Karte,
+     damit sie keine Kurve verdecken */
+  .info {
+    position: absolute; inset: 0 0 2px; pointer-events: none;
+    background: var(--flaeche); padding: 0 4px;
+    display: flex; flex-direction: column; justify-content: center; gap: 1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .info > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .info .oben { font-size: 13px; color: var(--text-2); }
+  .info .werte { display: flex; gap: 18px; font-size: 18px; line-height: 1.25; }
+  .info .reihe { display: inline-flex; align-items: center; gap: 7px; }
+  .info .wert { font-weight: 600; color: var(--text); }
+  .info .klein { color: var(--text-2); font-size: 12px; }
+
+  .legende { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-2); margin: 8px 2px 0; }
+
+  .ausschnitt { font-size: 13px; color: var(--text-2); margin: 2px 4px 6px; font-variant-numeric: tabular-nums; }
+  #balken { display: block; width: 100%; height: 56px; touch-action: none; }
+  .balken-hilfe { font-size: 12px; color: var(--text-3); margin: 6px 4px 0; }
+
+  .schalter-zeile {
+    display: flex; align-items: center; gap: 12px; padding: 4px 4px 2px;
+  }
+  .schalter-zeile .text { flex: 1; }
+  .schalter-zeile .titel { font-size: 15px; }
+  .schalter-zeile .erklaerung { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+  .schalter { position: relative; width: 51px; height: 31px; flex: none; }
+  .schalter input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .schalter .bahn {
+    position: absolute; inset: 0; border-radius: 16px; background: var(--raster); transition: background 0.2s;
+  }
+  .schalter .knopf {
+    position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+    background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.25); transition: transform 0.2s;
+  }
+  .schalter input:checked + .bahn { background: #34c759; }
+  .schalter input:checked + .bahn + .knopf { transform: translateX(20px); }
+  .schalter input:focus-visible + .bahn { outline: 2px solid var(--akzent); outline-offset: 2px; }
+
+  /* ---------- Einstellungen ---------- */
+  .einst h2 { font-size: 20px; margin: 4px 0 8px; }
+  .einst p { color: var(--text-2); font-size: 15px; margin: 0 0 10px; }
+  .einst label { display: block; font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
+  .einst input[type=password], .einst input[type=text] {
+    width: 100%; font: 16px ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 12px; border-radius: 10px; border: 1px solid var(--rahmen);
+    background: var(--hintergrund); color: var(--text);
+  }
+  .einst .knoepfe { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .knopf-voll {
+    border: 0; border-radius: 12px; padding: 12px 18px; background: var(--akzent); color: #fff;
+    font-weight: 600; cursor: pointer;
+  }
+  .knopf-voll:disabled { opacity: 0.5; }
+  .knopf-leer {
+    border: 1px solid var(--rahmen); border-radius: 12px; padding: 12px 18px; background: none;
+    color: var(--warnung-text); cursor: pointer;
+  }
+  .einst .ergebnis { margin-top: 12px; font-size: 15px; }
+  .einst .ergebnis.gut { color: #2f9e55; }
+  .einst .ergebnis.schlecht { color: var(--warnung-text); }
+  .fuss { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 18px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="kopf">
+   <div class="leiste">
+    <button id="zurueck" class="zurueck" hidden>&#8249; Räume</button>
+    <span class="platz"></span>
+    <div class="kopf-rechts">
+      <span id="stand" class="stand"></span>
+      <button id="neuLaden" class="symbol" aria-label="Neu laden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="einstellungenKnopf" class="symbol" aria-label="Einstellungen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+   </div>
+   <h1 id="titel">Raumklima</h1>
+  </header>
+
+  <div id="warnung" class="warnung" hidden></div>
+  <div id="meldung" class="meldung" hidden></div>
+
+  <!-- Raumliste -->
+  <section id="ansichtListe">
+    <div id="liste" class="liste"></div>
+  </section>
+
+  <!-- Verlauf eines Raums -->
+  <section id="ansichtRaum" hidden>
+    <div class="karte-flach">
+      <div class="kopfbereich">
+        <div id="jetzt" class="jetzt"></div>
+        <div class="achsentitel">
+          <span class="schluessel"><span class="linie temp"></span>°C</span>
+          <span class="schluessel">% rF<span class="linie rf"></span></span>
+        </div>
+        <div id="info" class="info" hidden></div>
+      </div>
+      <div class="diagramm-huelle">
+        <canvas id="diagramm" aria-label="Verlauf von Temperatur und relativer Feuchte"></canvas>
+      </div>
+      <div class="legende">
+        <span class="schluessel"><span class="linie temp"></span>Temperatur</span>
+        <span class="schluessel"><span class="linie rf"></span>relative Feuchte</span>
+        <span id="legendeBand" class="schluessel"><span class="flaechenmarke"></span>Lüften hätte nicht geholfen</span>
+      </div>
+    </div>
+
+    <div class="karte-flach">
+      <div id="ausschnitt" class="ausschnitt"></div>
+      <canvas id="balken" aria-label="Zeitraum wählen"></canvas>
+      <div class="balken-hilfe">Griffe ziehen, um den Zeitraum zu ändern. In der Mitte ziehen verschiebt ihn.</div>
+    </div>
+
+    <div id="schalterKarte" class="karte-flach">
+      <div class="schalter-zeile">
+        <div class="text">
+          <div class="titel">Rote Flächen anzeigen</div>
+          <div class="erklaerung">Raum über 60&nbsp;% rF, und die Balkonluft war nicht mindestens 1&nbsp;g/m³ trockener.</div>
+        </div>
+        <label class="schalter">
+          <input id="bandSchalter" type="checkbox" checked aria-label="Rote Flächen anzeigen">
+          <span class="bahn"></span><span class="knopf"></span>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- Einstellungen -->
+  <section id="ansichtEinstellungen" class="einst" hidden>
+    <div class="karte-flach">
+      <h2>Leseschlüssel</h2>
+      <p>Die App liest die Messdaten aus dem privaten Repository <strong>diyREBEL/raumklima-daten</strong>.
+         Dafür braucht sie den Schlüssel «Raumklima App» (nur Lesen).</p>
+      <p>Der Schlüssel wird nur auf diesem Gerät gespeichert. Füge die App zuerst zum Home-Bildschirm
+         hinzu (Teilen&nbsp;→ «Zum Home-Bildschirm») und trage ihn dort ein: Die App auf dem
+         Home-Bildschirm hat einen eigenen Speicher, getrennt von Safari.</p>
+      <div id="schluesselStatus"></div>
+      <label for="schluesselFeld">Schlüssel</label>
+      <input id="schluesselFeld" type="password" placeholder="github_pat_…"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="knoepfe">
+        <button id="speichern" class="knopf-voll">Speichern und prüfen</button>
+        <button id="entfernen" class="knopf-leer" hidden>Schlüssel entfernen</button>
+      </div>
+      <div id="ergebnis" class="ergebnis"></div>
+    </div>
+    <div class="fuss">Raumklima-App · Etappe 11</div>
+  </section>
+
+</div>
+
+<script>
+'use strict';
+
+/* ============================================================
+   Einstellungen
+   ============================================================ */
+
+const KONFIG = {
+  besitzer:        'diyREBEL',
+  repo:            'raumklima-daten',
+  datei:           'verlauf.csv',
+  zeitzone:        'Europe/Zurich',
+  veraltetNachS:   45 * 60,        // ab dann rotes Band "nichts hochgeladen"
+  feuchteWarnung:  60.0,           // wie FEUCHTE_WARNUNG in der Zentrale
+  abstandGproM3:   1.0,            // wie ABSTAND_G_PRO_M3 in der Zentrale
+  standardFensterS: 24 * 3600,     // beim Oeffnen: letzte 24 Stunden
+  minFensterS:     2 * 3600,       // kleinster Ausschnitt
+  autoNeuLadenMs:  5 * 60 * 1000   // solange die App offen ist
+};
+
+// Reihenfolge der Liste, wie im Konzept festgelegt
+const RAEUME = [
+  { id: 'bad',          name: 'Bad' },
+  { id: 'wohnzimmer',   name: 'Wohnzimmer' },
+  { id: 'elternzimmer', name: 'Elternzimmer' },
+  { id: 'kinderzimmer', name: 'Kinderzimmer' },
+  { id: 'balkon',       name: 'Balkon', aussen: true }
+];
+
+const SPEICHER_SCHLUESSEL = 'raumklima.schluessel';
+const SPEICHER_BAENDER    = 'raumklima.baender';
+
+/* ============================================================
+   Kleine Helfer
+   ============================================================ */
+
+const $ = (id) => document.getElementById(id);
+
+// localStorage kann in manchen Faellen fehlen oder werfen
+function speicherLesen(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function speicherSchreiben(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function speicherLoeschen(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+function farbe(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Zeitangaben immer in Schweizer Zeit, egal wo das iPhone gerade ist
+const fmtUhr  = new Intl.DateTimeFormat('de-CH', { timeZone: KONFIG.zeitzone, hour: '2-digit', minute: '2-digit' });
+const fmtTag  = new Intl.DateTimeFormat('de-CH', { timeZone: KONFIG.zeitzone, day: '2-digit', month: '2-digit' });
+const fmtWoTag = new Intl.DateTimeFormat('de-CH', { timeZone: KONFIG.zeitzone, weekday: 'short', day: 'numeric', month: 'numeric' });
+const fmtTeile = new Intl.DateTimeFormat('en-GB', {
+  timeZone: KONFIG.zeitzone, hourCycle: 'h23',
+  year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'short'
+});
+
+function uhr(s)  { return fmtUhr.format(new Date(s * 1000)); }
+function tag(s)  { return fmtTag.format(new Date(s * 1000)); }
+function woTag(s) { return fmtWoTag.format(new Date(s * 1000)).replace(',', ''); }
+
+// Zerlegt einen Zeitpunkt in Schweizer Datum und Uhrzeit.
+// Ergebnisse werden gemerkt, weil die Zeitachse beim Ziehen
+// des Auswahlbalkens sehr oft dieselben Stunden abfragt.
+const teileGemerkt = new Map();
+function teile(s) {
+  let e = teileGemerkt.get(s);
+  if (e) return e;
+  const t = {};
+  for (const p of fmtTeile.formatToParts(new Date(s * 1000))) t[p.type] = p.value;
+  e = { jahr: +t.year, monat: +t.month, tag: +t.day, stunde: +t.hour, minute: +t.minute };
+  if (teileGemerkt.size > 5000) teileGemerkt.clear();
+  teileGemerkt.set(s, e);
+  return e;
+}
+
+function gleicherTag(a, b) {
+  const x = teile(a), y = teile(b);
+  return x.jahr === y.jahr && x.monat === y.monat && x.tag === y.tag;
+}
+
+// "23:15" heute, sonst "14.10. 23:15"
+function zeitpunkt(s) {
+  const jetzt = Date.now() / 1000;
+  return gleicherTag(s, jetzt) ? uhr(s) : tag(s) + ' ' + uhr(s);
+}
+
+function zahl(x, stellen) { return x.toFixed(stellen); }
+
+/*
+  Absolute Feuchte in g/m³ - dieselbe Magnus-Formel wie in der
+  Zentrale, damit App und Display gleich rechnen.
+*/
+function absoluteFeuchte(t, rf) {
+  rf = Math.min(100, Math.max(0.1, rf));
+  const saettigung = 6.112 * Math.exp((17.62 * t) / (243.12 + t));
+  return 216.7 * (saettigung * rf / 100) / (t + 273.15);
+}
+
+/* ============================================================
+   Daten holen und lesen
+   ============================================================ */
+
+let daten = null;          // { erstellt, intervall, zeiten[], raeume{id:{t[],f[]}} }
+let letzterAbruf = 0;
+let laedtGerade = false;
+
+class AbrufFehler extends Error {
+  constructor(text, einstellungen) { super(text); this.einstellungen = !!einstellungen; }
+}
+
+async function verlaufHolen(schluessel) {
+  const url = `https://api.github.com/repos/${KONFIG.besitzer}/${KONFIG.repo}/contents/${KONFIG.datei}`;
+  let antwort;
+  try {
+    antwort = await fetch(url, {
+      cache: 'no-store',
+      // Bewusst nur diese zwei Kopfzeilen: Der Browser fragt GitHub
+      // vorher, ob eine Webseite sie senden darf (CORS). Authorization
+      // und Accept sind dort erlaubt; jede weitere waere ein Risiko.
+      headers: {
+        'Authorization': 'Bearer ' + schluessel,
+        'Accept': 'application/vnd.github.raw'
+      }
+    });
+  } catch (e) {
+    throw new AbrufFehler('Keine Verbindung zu GitHub. Ist das iPhone online?');
+  }
+  if (antwort.status === 401) {
+    throw new AbrufFehler('Der Schlüssel wird nicht akzeptiert (HTTP 401). Bitte in den Einstellungen prüfen.', true);
+  }
+  if (antwort.status === 403 || antwort.status === 404) {
+    throw new AbrufFehler(`Kein Zugriff auf die Messdaten (HTTP ${antwort.status}). Hat der Schlüssel Leserechte auf raumklima-daten?`, true);
+  }
+  if (!antwort.ok) {
+    throw new AbrufFehler(`GitHub antwortet mit HTTP ${antwort.status}. Später nochmals versuchen.`);
+  }
+  return await antwort.text();
+}
+
+/*
+  Liest verlauf.csv:
+    # raumklima-zentrale v1 erstellt=... intervall=900
+    zeit,kinderzimmer_t,kinderzimmer_f,...
+    1760558400,21.3,55.2,...
+  Leere Felder werden zu null.
+*/
+function csvLesen(text) {
+  let erstellt = null, intervall = 900, spalten = null;
+  const zeiten = [];
+  const roh = [];
+
+  for (const zeileRoh of text.split('\n')) {
+    const zeile = zeileRoh.trim();
+    if (!zeile) continue;
+    if (zeile.startsWith('#')) {
+      const e = zeile.match(/erstellt=(\d+)/);  if (e) erstellt = +e[1];
+      const i = zeile.match(/intervall=(\d+)/); if (i) intervall = +i[1];
+      continue;
+    }
+    if (!spalten) { spalten = zeile.split(','); continue; }
+    const felder = zeile.split(',');
+    const t = parseInt(felder[0], 10);
+    if (!Number.isFinite(t)) continue;
+    zeiten.push(t);
+    roh.push(felder);
+  }
+
+  if (!spalten) throw new AbrufFehler('Die Datei verlauf.csv hat ein unbekanntes Format.');
+
+  const raeume = {};
+  for (const r of RAEUME) {
+    const iT = spalten.indexOf(r.id + '_t'), iF = spalten.indexOf(r.id + '_f');
+    const t = [], f = [];
+    for (const felder of roh) {
+      const a = iT >= 0 ? felder[iT] : '', b = iF >= 0 ? felder[iF] : '';
+      t.push(a === '' || a === undefined ? null : parseFloat(a));
+      f.push(b === '' || b === undefined ? null : parseFloat(b));
+    }
+    raeume[r.id] = { t, f };
+  }
+
+  if (erstellt === null && zeiten.length) erstellt = zeiten[zeiten.length - 1] + intervall;
+  return { erstellt, intervall, zeiten, raeume };
+}
+
+async function datenLaden() {
+  const schluessel = speicherLesen(SPEICHER_SCHLUESSEL);
+  if (!schluessel) { ansichtZeigen('einstellungen', false); return; }
+  if (laedtGerade) return;
+  laedtGerade = true;
+  document.body.classList.add('laedt');
+  try {
+    daten = csvLesen(await verlaufHolen(schluessel));
+    letzterAbruf = Date.now();
+    meldungZeigen(null);
+  } catch (e) {
+    meldungZeigen(e.message, e.einstellungen);
+  } finally {
+    laedtGerade = false;
+    document.body.classList.remove('laedt');
+    allesZeichnen();
+  }
+}
+
+/* ============================================================
+   Kopfzeile, Warnungen, Meldungen
+   ============================================================ */
+
+function meldungZeigen(text, mitEinstellungen) {
+  const m = $('meldung');
+  m.textContent = '';
+  if (!text) { m.hidden = true; return; }
+  const s = document.createElement('strong');
+  s.textContent = text;
+  m.appendChild(s);
+  if (mitEinstellungen) {
+    const b = document.createElement('button');
+    b.textContent = 'Zu den Einstellungen';
+    b.addEventListener('click', () => ansichtZeigen('einstellungen', true));
+    m.appendChild(document.createElement('br'));
+    m.appendChild(b);
+  }
+  m.hidden = false;
+}
+
+function kopfAktualisieren() {
+  $('stand').textContent = daten && daten.erstellt ? 'Stand ' + zeitpunkt(daten.erstellt) : '';
+
+  const w = $('warnung');
+  const jetzt = Date.now() / 1000;
+  if (daten && daten.erstellt && jetzt - daten.erstellt > KONFIG.veraltetNachS) {
+    w.textContent = 'Zentrale hat seit ' + zeitpunkt(daten.erstellt) + ' nichts hochgeladen';
+    w.hidden = false;
+  } else {
+    w.hidden = true;
+  }
+}
+
+/* ============================================================
+   Raumliste
+   ============================================================ */
+
+/*
+  Letzter Wert eines Raums. "Aktuell" ist er nur, wenn er in der
+  neuesten Zeile der Datei steht - sonst schweigt der Knoten, und
+  statt einer alten Zahl erscheint "keine aktuellen Daten".
+  Zusaetzlich darf diese neueste Zeile hoechstens zwei Intervalle
+  vor dem Hochladen enden. Sonst hat die Zentrale zwar hochgeladen,
+  aber schon laenger von keinem Knoten mehr etwas gehoert (zum
+  Beispiel nach einem Neustart nach langer Pause).
+*/
+function letzterWert(id) {
+  const r = daten.raeume[id], z = daten.zeiten, iv = daten.intervall;
+  const neuesteZeileFrisch = z.length > 0 &&
+        z[z.length - 1] + iv >= daten.erstellt - 2 * iv;
+  for (let i = z.length - 1; i >= 0; i--) {
+    if (r.t[i] !== null || r.f[i] !== null) {
+      return { i, t: r.t[i], f: r.f[i], aktuell: i === z.length - 1 && neuesteZeileFrisch };
+    }
+  }
+  return null;
+}
+
+function listeZeichnen() {
+  const liste = $('liste');
+  liste.textContent = '';
+  if (!daten) return;
+
+  for (const raum of RAEUME) {
+    const w = letzterWert(raum.id);
+    const karte = document.createElement('button');
+    karte.className = 'karte';
+    karte.addEventListener('click', () => ansichtZeigen('raum', true, raum.id));
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = raum.name;
+    karte.appendChild(name);
+
+    const werte = document.createElement('div');
+    werte.className = 'werte';
+    const zeile2 = document.createElement('div');
+    zeile2.className = 'zeile2';
+    const links = document.createElement('span');
+    const pfeil = document.createElement('span');
+    pfeil.className = 'pfeil';
+    pfeil.textContent = 'Verlauf ›';
+
+    if (w && w.aktuell && w.t !== null) {
+      const t = document.createElement('span'); t.className = 'temp'; t.textContent = zahl(w.t, 1) + '°';
+      const f = document.createElement('span'); f.className = 'rf';
+      f.textContent = w.f !== null ? Math.round(w.f) + ' %' : '–';
+      werte.append(t, f);
+      links.textContent = 'Stand ' + zeitpunkt(daten.zeiten[w.i] + daten.intervall);
+    } else {
+      const k = document.createElement('span'); k.className = 'keine';
+      k.textContent = 'keine aktuellen Daten';
+      werte.appendChild(k);
+      links.textContent = w ? 'zuletzt ' + zeitpunkt(daten.zeiten[w.i] + daten.intervall) : 'noch nie gemessen';
+    }
+    karte.appendChild(werte);
+    zeile2.append(links, pfeil);
+    karte.appendChild(zeile2);
+    liste.appendChild(karte);
+  }
+}
+
+/* ============================================================
+   Raumansicht: Zustand
+   ============================================================ */
+
+let raumId = null;
+let fenster = null;        // { x0, x1 } in Sekunden (Unix-Zeit)
+let ausdehnung = null;     // { x0, x1 } ganzer Datenbereich
+let infoIndex = null;      // Index unter dem Finger, oder null
+
+function baenderAn() { return speicherLesen(SPEICHER_BAENDER) !== 'aus'; }
+
+function raumOeffnen(id) {
+  raumId = id;
+  infoIndex = null;
+  fenster = null;           // beim Oeffnen: wieder die letzten 24 Stunden
+  const raum = RAEUME.find(r => r.id === id);
+  $('titel').textContent = raum.name;
+  $('schalterKarte').hidden = !!raum.aussen;
+  $('bandSchalter').checked = baenderAn();
+}
+
+function ausdehnungBerechnen() {
+  const z = daten.zeiten;
+  if (!z.length) { ausdehnung = null; fenster = null; return; }
+  ausdehnung = { x0: z[0], x1: z[z.length - 1] + daten.intervall };
+  const spanne = ausdehnung.x1 - ausdehnung.x0;
+  if (!fenster) {
+    const breite = Math.min(KONFIG.standardFensterS, spanne);
+    fenster = { x0: ausdehnung.x1 - breite, x1: ausdehnung.x1 };
+  } else {
+    // nach einem Neu-Laden: Fenster innerhalb der Daten halten,
+    // und wer am rechten Ende war, bleibt am rechten Ende
+    const breite = Math.min(fenster.x1 - fenster.x0, spanne);
+    if (fenster.x1 >= ausdehnung.x1 - daten.intervall * 2) fenster.x1 = ausdehnung.x1;
+    fenster.x1 = Math.min(Math.max(fenster.x1, ausdehnung.x0 + breite), ausdehnung.x1);
+    fenster.x0 = fenster.x1 - breite;
+  }
+}
+
+/*
+  Rote Flaechen: Intervalle, in denen der Raum ueber 60 % rF lag
+  UND die Balkonluft nicht mindestens 1 g/m³ weniger Wasser
+  enthielt. Genau dann hat das Display "Jetzt nicht lueften"
+  gezeigt. Ohne Balkonwert: keine Flaeche (man weiss es nicht).
+*/
+function baenderBerechnen(id) {
+  const r = daten.raeume[id], a = daten.raeume.balkon;
+  const iv = daten.intervall, ergebnis = [];
+  for (let i = 0; i < daten.zeiten.length; i++) {
+    if (r.f[i] === null || r.t[i] === null || a.t[i] === null || a.f[i] === null) continue;
+    if (r.f[i] <= KONFIG.feuchteWarnung) continue;
+    const innen = absoluteFeuchte(r.t[i], r.f[i]);
+    const aussen = absoluteFeuchte(a.t[i], a.f[i]);
+    if (innen > aussen + KONFIG.abstandGproM3) continue;   // Lueften haette geholfen
+    const von = daten.zeiten[i], bis = von + iv;
+    const letztes = ergebnis[ergebnis.length - 1];
+    if (letztes && letztes.bis >= von) letztes.bis = bis; else ergebnis.push({ von, bis });
+  }
+  return ergebnis;
+}
+
+function istInBand(i) {
+  if (raumId === 'balkon' || !baenderAn()) return false;
+  const r = daten.raeume[raumId], a = daten.raeume.balkon;
+  if (r.f[i] === null || r.t[i] === null || a.t[i] === null || a.f[i] === null) return false;
+  if (r.f[i] <= KONFIG.feuchteWarnung) return false;
+  return absoluteFeuchte(r.t[i], r.f[i]) <= absoluteFeuchte(a.t[i], a.f[i]) + KONFIG.abstandGproM3;
+}
+
+/* ============================================================
+   Zeichnen: Grundlagen
+   ============================================================ */
+
+// Bereitet eine Zeichenflaeche fuer scharfe Linien auf Retina vor
+function leinwand(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const b = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(b * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(b * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, b, h);
+  return { ctx, b, h };
+}
+
+// Rechteck mit runden Ecken; aeltere Browser zeichnen es eckig
+function abgerundet(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+
+/*
+  Runde Skala mit genau vier Abschnitten, damit beide Achsen
+  dieselben fuenf Rasterlinien nutzen koennen - wie skalaWaehlen()
+  in der Zentrale.
+*/
+function skala(min, max, schritte) {
+  const n = 4, eps = 1e-9;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
+  for (const s of schritte) {
+    let u = Math.floor(min / s + eps) * s;
+    let o = Math.ceil(max / s - eps) * s;
+    if (o - u < s - eps) o = u + s;
+    if (o - u <= n * s + eps) {
+      while (o - u < n * s - eps) {
+        o += s;
+        if (o - u < n * s - eps) u -= s;
+      }
+      return { u, o, s };
+    }
+  }
+  const sGross = schritte[schritte.length - 1];
+  const s = Math.ceil((max - min) / (n * sGross)) * sGross;
+  const u = Math.floor(min / s) * s;
+  return { u, o: u + n * s, s };
+}
+
+// Index des Punktes mit Zeit am naechsten zu t (Mitte des Intervalls)
+function naechsterIndex(t) {
+  const z = daten.zeiten, halb = daten.intervall / 2;
+  let lo = 0, hi = z.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (z[mid] + halb < t) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(z[lo - 1] + halb - t) < Math.abs(z[lo] + halb - t)) lo--;
+  return lo;
+}
+
+/*
+  Schritte fuer die Zeitachse. Gewaehlt wird der kleinste Schritt,
+  bei dem die Beschriftungen nicht zu eng stehen.
+*/
+const ZEITSCHRITTE = [1, 2, 3, 6, 12, 24, 48, 72, 168].map(h => h * 3600);
+
+function zeitMarken(x0, x1, breitePx) {
+  const spanne = x1 - x0;
+  const maxMarken = Math.max(2, Math.floor(breitePx / 62));
+  let schritt = ZEITSCHRITTE[ZEITSCHRITTE.length - 1];
+  for (const s of ZEITSCHRITTE) { if (spanne / s <= maxMarken) { schritt = s; break; } }
+  const stunden = schritt / 3600;
+  const marken = [];
+  // volle Stunden in Schweizer Zeit absuchen
+  for (let t = Math.ceil(x0 / 3600) * 3600; t <= x1; t += 3600) {
+    const p = teile(t);
+    if (p.minute !== 0) continue;
+    if (stunden < 24) {
+      if (p.stunde % stunden === 0) marken.push({ t, tagwechsel: p.stunde === 0 });
+    } else if (p.stunde === 0) {
+      const tageSeitEpoche = Math.round(Date.UTC(p.jahr, p.monat - 1, p.tag) / 86400000);
+      if (tageSeitEpoche % (stunden / 24) === 0) marken.push({ t, tagwechsel: true });
+    }
+  }
+  return { marken, stunden };
+}
+
+/* ============================================================
+   Zeichnen: Hauptdiagramm
+   ============================================================ */
+
+const RAND = { links: 34, rechts: 34, oben: 8, unten: 22 };
+
+function diagrammZeichnen() {
+  const canvas = $('diagramm');
+  const { ctx, b, h } = leinwand(canvas);
+  if (!daten || !ausdehnung || !fenster || !raumId) return;
+
+  const r = daten.raeume[raumId];
+  const z = daten.zeiten, iv = daten.intervall, halb = iv / 2;
+  const L = RAND.links, R = b - RAND.rechts, O = RAND.oben, U = h - RAND.unten;
+  const xVon = (t) => L + (t - fenster.x0) / (fenster.x1 - fenster.x0) * (R - L);
+
+  // sichtbare Punkte (mit je einem Nachbarn fuer saubere Linien am Rand)
+  let iA = naechsterIndex(fenster.x0), iE = naechsterIndex(fenster.x1);
+  iA = Math.max(0, iA - 1); iE = Math.min(z.length - 1, iE + 1);
+
+  let tMin = Infinity, tMax = -Infinity, fMin = Infinity, fMax = -Infinity;
+  for (let i = iA; i <= iE; i++) {
+    const m = z[i] + halb;
+    if (m < fenster.x0 || m > fenster.x1) continue;
+    if (r.t[i] !== null) { tMin = Math.min(tMin, r.t[i]); tMax = Math.max(tMax, r.t[i]); }
+    if (r.f[i] !== null) { fMin = Math.min(fMin, r.f[i]); fMax = Math.max(fMax, r.f[i]); }
+  }
+
+  const ts = skala(tMin, tMax, [0.5, 1, 2, 5, 10]);
+  let fs = skala(fMin, fMax, [1, 2, 5, 10, 20, 25]);
+  // relative Feuchte liegt zwischen 0 und 100 %
+  if (fs.u < 0) { fs = { u: 0, o: fs.o - fs.u, s: fs.s }; }
+  if (fs.o > 100) { const d = fs.o - 100; fs = { u: Math.max(0, fs.u - d), o: 100, s: fs.s }; }
+  const yT = (v) => U - (v - ts.u) / (ts.o - ts.u) * (U - O);
+  const yF = (v) => U - (v - fs.u) / (fs.o - fs.u) * (U - O);
+
+  const cRaster = farbe('--raster'), cText = farbe('--text-2'), cText3 = farbe('--text-3');
+  const cTemp = farbe('--temp'), cFeuchte = farbe('--feuchte'), cBand = farbe('--band');
+  const cFlaeche = farbe('--flaeche');
+
+  // --- rote Flaechen ---
+  if (raumId !== 'balkon' && baenderAn()) {
+    ctx.fillStyle = cBand;
+    for (const band of baenderBerechnen(raumId)) {
+      if (band.bis < fenster.x0 || band.von > fenster.x1) continue;
+      const a = Math.max(L, xVon(band.von)), e = Math.min(R, xVon(band.bis));
+      ctx.fillRect(a, O, Math.max(1, e - a), U - O);
+    }
+  }
+
+  // --- waagrechtes Raster und Achsen ---
+  ctx.font = '11px -apple-system, system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = Math.round(U - k * (U - O) / 4) + 0.5;
+    ctx.strokeStyle = cRaster;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(R, y); ctx.stroke();
+    ctx.fillStyle = cText;
+    const tv = ts.u + k * ts.s, fv = fs.u + k * (fs.o - fs.u) / 4;
+    ctx.textAlign = 'right';
+    ctx.fillText(ts.s < 1 ? zahl(tv, 1) : zahl(tv, 0), L - 5, y);
+    ctx.textAlign = 'left';
+    ctx.fillText(Number.isInteger(fv) ? String(fv) : zahl(fv, 1), R + 5, y);
+  }
+
+  // --- Zeitachse ---
+  const { marken, stunden } = zeitMarken(fenster.x0, fenster.x1, R - L);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'center';
+  for (const m of marken) {
+    const x = Math.round(xVon(m.t)) + 0.5;
+    if (x < L || x > R) continue;
+    ctx.strokeStyle = cRaster;
+    ctx.beginPath(); ctx.moveTo(x, O); ctx.lineTo(x, U); ctx.stroke();
+    ctx.fillStyle = m.tagwechsel ? cText : cText3;
+    const text = (stunden >= 24 || m.tagwechsel) ? woTag(m.t) : uhr(m.t);
+    const halbeBreite = ctx.measureText(text).width / 2;
+    ctx.fillText(text, Math.min(Math.max(x, halbeBreite + 1), b - halbeBreite - 1), h - 5);
+  }
+
+  // --- Kurven ---
+  ctx.save();
+  ctx.beginPath(); ctx.rect(L, O - 2, R - L, U - O + 4); ctx.clip();
+  kurve(ctx, r.t, yT, xVon, iA, iE, cTemp);
+  kurve(ctx, r.f, yF, xVon, iA, iE, cFeuchte);
+  ctx.restore();
+
+  // --- Fadenkreuz ---
+  if (infoIndex !== null && infoIndex >= iA && infoIndex <= iE) {
+    const x = Math.round(xVon(z[infoIndex] + halb)) + 0.5;
+    if (x >= L && x <= R) {
+      ctx.strokeStyle = cText3; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, O); ctx.lineTo(x, U); ctx.stroke();
+      punkt(ctx, x, r.t[infoIndex], yT, cTemp, cFlaeche);
+      punkt(ctx, x, r.f[infoIndex], yF, cFeuchte, cFlaeche);
+    }
+  }
+}
+
+/*
+  Eine Kurve: 2 px, runde Enden. Zwischen zwei Punkten wird nur
+  verbunden, wenn sie direkt aufeinanderfolgen. Eine Luecke bleibt
+  eine Luecke - eine Messung zu behaupten, die es nie gab, waere
+  schlimmer. Einzelne Punkte ohne Nachbarn werden als kleiner
+  Punkt gezeigt, damit sie nicht verschwinden.
+*/
+function kurve(ctx, werte, yVon, xVon, iA, iE, farbeLinie) {
+  const z = daten.zeiten, iv = daten.intervall, halb = iv / 2;
+  ctx.strokeStyle = farbeLinie; ctx.fillStyle = farbeLinie;
+  ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  let offen = false;
+  const einzeln = [];
+  ctx.beginPath();
+  for (let i = iA; i <= iE; i++) {
+    const v = werte[i];
+    if (v === null) { offen = false; continue; }
+    const x = xVon(z[i] + halb), y = yVon(v);
+    const anschluss = offen && (z[i] - z[i - 1] <= iv * 1.01);
+    if (anschluss) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    const vorher = i > 0 && werte[i - 1] !== null && z[i] - z[i - 1] <= iv * 1.01;
+    const nachher = i < z.length - 1 && werte[i + 1] !== null && z[i + 1] - z[i] <= iv * 1.01;
+    if (!vorher && !nachher) einzeln.push([x, y]);
+    offen = true;
+  }
+  ctx.stroke();
+  for (const [x, y] of einzeln) {
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function punkt(ctx, x, v, yVon, f, ring) {
+  if (v === null) return;
+  const y = yVon(v);
+  ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fillStyle = ring; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fillStyle = f; ctx.fill();
+}
+
+/* ============================================================
+   Finger auf dem Diagramm: Werte anzeigen
+   ============================================================ */
+
+function infoAnzeigen() {
+  const box = $('info');
+  if (infoIndex === null || !daten) { box.hidden = true; return; }
+  const i = infoIndex, r = daten.raeume[raumId], a = daten.raeume.balkon;
+  const von = daten.zeiten[i], bis = von + daten.intervall;
+  box.textContent = '';
+
+  // Zeile 1: Zeitraum
+  const oben = document.createElement('div');
+  oben.className = 'oben';
+  oben.textContent = woTag(von) + ', ' + uhr(von) + '–' + uhr(bis);
+  box.appendChild(oben);
+
+  // Zeile 2: die beiden Messwerte, je mit Linienmuster als Schluessel
+  const werte = document.createElement('div');
+  werte.className = 'werte';
+  function reihe(klasse, text) {
+    const d = document.createElement('span'); d.className = 'reihe';
+    const l = document.createElement('span'); l.className = 'linie ' + klasse;
+    const w = document.createElement('span'); w.className = 'wert'; w.textContent = text;
+    d.append(l, w); werte.appendChild(d);
+  }
+  reihe('temp', r.t[i] !== null ? zahl(r.t[i], 1) + ' °C' : 'kein Wert');
+  reihe('rf', r.f[i] !== null ? zahl(r.f[i], 1) + ' % rF' : 'kein Wert');
+  box.appendChild(werte);
+
+  // Zeile 3: absolute Feuchte innen und auf dem Balkon (nur wenn Flaechen an)
+  if (raumId !== 'balkon' && baenderAn() && r.t[i] !== null && r.f[i] !== null) {
+    const k = document.createElement('div'); k.className = 'klein';
+    let text = 'absolute Feuchte ' + zahl(absoluteFeuchte(r.t[i], r.f[i]), 1);
+    text += (a.t[i] !== null && a.f[i] !== null)
+          ? ' · Balkon ' + zahl(absoluteFeuchte(a.t[i], a.f[i]), 1) + ' g/m³'
+          : ' g/m³ · Balkon kein Wert';
+    k.textContent = text;
+    box.appendChild(k);
+  }
+
+  // Zeile 4: nur im rot hinterlegten Bereich
+  if (istInBand(i)) {
+    const h = document.createElement('div'); h.className = 'klein reihe';
+    const m = document.createElement('span'); m.className = 'flaechenmarke';
+    const t = document.createElement('span'); t.textContent = 'Lüften hätte nicht geholfen';
+    h.append(m, t); box.appendChild(h);
+  }
+
+  box.hidden = false;
+}
+
+function infoAusZeiger(ereignis) {
+  if (!daten || !fenster) return;
+  const canvas = $('diagramm');
+  const rect = canvas.getBoundingClientRect();
+  const x = ereignis.clientX - rect.left;
+  const L = RAND.links, R = canvas.clientWidth - RAND.rechts;
+  if (x < L - 10 || x > R + 10) return;
+  const t = fenster.x0 + (Math.min(Math.max(x, L), R) - L) / (R - L) * (fenster.x1 - fenster.x0);
+  let i = naechsterIndex(t);
+  const halb = daten.intervall / 2;
+  // nur Punkte im sichtbaren Fenster
+  if (daten.zeiten[i] + halb < fenster.x0 && i < daten.zeiten.length - 1) i++;
+  if (daten.zeiten[i] + halb > fenster.x1 && i > 0) i--;
+  if (i !== infoIndex) {
+    infoIndex = i;
+    diagrammZeichnen();
+    infoAnzeigen();
+  }
+}
+
+/* ============================================================
+   Auswahlbalken (wie beim Videoschnitt)
+   ============================================================ */
+
+const GRIFF = 10;          // Breite eines Griffs in px
+const GRIFF_TREFFER = 24;  // so weit daneben trifft man ihn noch
+
+function balkenGeometrie() {
+  const canvas = $('balken');
+  const b = canvas.clientWidth;
+  const L = GRIFF + 2, R = b - GRIFF - 2;
+  const xVon = (t) => L + (t - ausdehnung.x0) / (ausdehnung.x1 - ausdehnung.x0 || 1) * (R - L);
+  const tVon = (x) => ausdehnung.x0 + (x - L) / (R - L) * (ausdehnung.x1 - ausdehnung.x0);
+  return { b, L, R, xVon, tVon };
+}
+
+function balkenZeichnen() {
+  const canvas = $('balken');
+  const { ctx, b, h } = leinwand(canvas);
+  if (!daten || !ausdehnung || !raumId) return;
+  const { L, R, xVon } = balkenGeometrie();
+  const r = daten.raeume[raumId], z = daten.zeiten, halb = daten.intervall / 2;
+  const O = 6, U = h - 6;
+
+  // Mini-Vorschau: beide Kurven ueber die ganzen Daten, eigene Skalen
+  let tMin = Infinity, tMax = -Infinity, fMin = Infinity, fMax = -Infinity;
+  for (let i = 0; i < z.length; i++) {
+    if (r.t[i] !== null) { tMin = Math.min(tMin, r.t[i]); tMax = Math.max(tMax, r.t[i]); }
+    if (r.f[i] !== null) { fMin = Math.min(fMin, r.f[i]); fMax = Math.max(fMax, r.f[i]); }
+  }
+  const yVon = (min, max) => (v) => U - (max > min ? (v - min) / (max - min) : 0.5) * (U - O);
+
+  ctx.fillStyle = farbe('--hintergrund');
+  abgerundet(ctx, L, 2, R - L, h - 4, 6); ctx.fill();
+
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  const linie = (werte, y, f) => {
+    ctx.strokeStyle = f; ctx.lineWidth = 1.25; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let offen = false;
+    for (let i = 0; i < z.length; i++) {
+      if (werte[i] === null) { offen = false; continue; }
+      const x = xVon(z[i] + halb), yy = y(werte[i]);
+      if (offen && z[i] - z[i - 1] <= daten.intervall * 1.01) ctx.lineTo(x, yy); else ctx.moveTo(x, yy);
+      offen = true;
+    }
+    ctx.stroke();
+  };
+  linie(r.t, yVon(tMin, tMax), farbe('--temp'));
+  linie(r.f, yVon(fMin, fMax), farbe('--feuchte'));
+  ctx.restore();
+
+  // nicht gewaehlte Bereiche abdunkeln
+  const a = xVon(fenster.x0), e = xVon(fenster.x1);
+  ctx.fillStyle = farbe('--flaeche');
+  ctx.globalAlpha = 0.72;
+  ctx.fillRect(L, 2, Math.max(0, a - L), h - 4);
+  ctx.fillRect(e, 2, Math.max(0, R - e), h - 4);
+  ctx.globalAlpha = 1;
+
+  // Rahmen um die Auswahl und die beiden Griffe (aussen an den Kanten)
+  const cGriff = farbe('--text-2');
+  ctx.strokeStyle = cGriff; ctx.lineWidth = 2;
+  ctx.strokeRect(a, 2, Math.max(1, e - a), h - 4);
+  ctx.fillStyle = cGriff;
+  abgerundet(ctx, a - GRIFF, 2, GRIFF, h - 4, [6, 0, 0, 6]); ctx.fill();
+  abgerundet(ctx, e, 2, GRIFF, h - 4, [0, 6, 6, 0]); ctx.fill();
+  // Rillen auf den Griffen
+  ctx.strokeStyle = farbe('--flaeche'); ctx.lineWidth = 1.5;
+  for (const gx of [a - GRIFF / 2, e + GRIFF / 2]) {
+    ctx.beginPath();
+    ctx.moveTo(gx, h / 2 - 7); ctx.lineTo(gx, h / 2 + 7);
+    ctx.stroke();
+  }
+
+  // Zeitraum als Text darueber
+  const spanne = fenster.x1 - fenster.x0;
+  const dauer = spanne >= 2 * 86400 ? Math.round(spanne / 86400) + ' Tage' : Math.round(spanne / 3600) + ' h';
+  $('ausschnitt').textContent = woTag(fenster.x0) + ' ' + uhr(fenster.x0) + ' – ' +
+                                woTag(fenster.x1) + ' ' + uhr(fenster.x1) + ' · ' + dauer;
+}
+
+let ziehen = null;   // { art: 'links'|'rechts'|'schieben', versatz }
+
+function balkenStart(ev) {
+  if (!ausdehnung) return;
+  const canvas = $('balken');
+  const { xVon, tVon } = balkenGeometrie();
+  const x = ev.clientX - canvas.getBoundingClientRect().left;
+  const a = xVon(fenster.x0), e = xVon(fenster.x1);
+
+  let art;
+  if (x >= a - GRIFF_TREFFER && x <= a && x < (a + e) / 2) art = 'links';
+  else if (x <= e + GRIFF_TREFFER && x >= e && x > (a + e) / 2) art = 'rechts';
+  else if (x > a && x < e) art = (x - a < 12 && e - a > 36) ? 'links'
+                               : (e - x < 12 && e - a > 36) ? 'rechts' : 'schieben';
+  else {
+    // daneben getippt: Auswahl dorthin springen lassen
+    const breite = fenster.x1 - fenster.x0;
+    fensterSetzen(tVon(x) - breite / 2, tVon(x) + breite / 2, true);
+    art = 'schieben';
+  }
+  ziehen = { art, versatz: tVon(x) - fenster.x0 };
+  canvas.setPointerCapture(ev.pointerId);
+  infoIndex = null; $('info').hidden = true;
+  ev.preventDefault();
+}
+
+function balkenZiehen(ev) {
+  if (!ziehen) return;
+  const canvas = $('balken');
+  const { tVon } = balkenGeometrie();
+  const t = tVon(ev.clientX - canvas.getBoundingClientRect().left);
+  const min = Math.min(KONFIG.minFensterS, ausdehnung.x1 - ausdehnung.x0);
+  if (ziehen.art === 'links') {
+    fensterSetzen(Math.min(t, fenster.x1 - min), fenster.x1, false);
+  } else if (ziehen.art === 'rechts') {
+    fensterSetzen(fenster.x0, Math.max(t, fenster.x0 + min), false);
+  } else {
+    const breite = fenster.x1 - fenster.x0;
+    fensterSetzen(t - ziehen.versatz, t - ziehen.versatz + breite, true);
+  }
+}
+
+function balkenEnde() { ziehen = null; }
+
+/*
+  Setzt das Fenster und haelt es innerhalb der Daten.
+  verschieben = true: Breite beibehalten, nur verschieben.
+*/
+function fensterSetzen(x0, x1, verschieben) {
+  const ex0 = ausdehnung.x0, ex1 = ausdehnung.x1;
+  if (verschieben) {
+    const breite = Math.min(x1 - x0, ex1 - ex0);
+    x0 = Math.min(Math.max(x0, ex0), ex1 - breite);
+    x1 = x0 + breite;
+  } else {
+    x0 = Math.max(x0, ex0);
+    x1 = Math.min(x1, ex1);
+  }
+  fenster = { x0, x1 };
+  neuZeichnenBald();
+}
+
+let zeichnenGeplant = false;
+function neuZeichnenBald() {
+  if (zeichnenGeplant) return;
+  zeichnenGeplant = true;
+  requestAnimationFrame(() => {
+    zeichnenGeplant = false;
+    diagrammZeichnen();
+    balkenZeichnen();
+  });
+}
+
+/* ============================================================
+   Raumansicht: Kopf mit aktuellem Wert
+   ============================================================ */
+
+function jetztZeichnen() {
+  const j = $('jetzt');
+  j.textContent = '';
+  const w = letzterWert(raumId);
+  const aktuell = !!(w && w.aktuell && w.t !== null);
+  j.classList.toggle('leer', !aktuell);
+  if (aktuell) {
+    const t = document.createElement('span'); t.className = 'temp'; t.textContent = zahl(w.t, 1) + ' °C';
+    const f = document.createElement('span'); f.className = 'rf';
+    f.textContent = w.f !== null ? zahl(w.f, 0) + ' % rF' : '';
+    const wann = document.createElement('span'); wann.className = 'wann';
+    wann.textContent = 'Stand ' + zeitpunkt(daten.zeiten[w.i] + daten.intervall);
+    j.append(t, f, wann);
+  } else {
+    const k = document.createElement('span'); k.className = 'keine'; k.textContent = 'keine aktuellen Daten';
+    const wann = document.createElement('span'); wann.className = 'wann';
+    wann.textContent = w ? 'zuletzt ' + zeitpunkt(daten.zeiten[w.i] + daten.intervall) : '';
+    j.append(k, wann);
+  }
+}
+
+function raumZeichnen() {
+  if (!daten || !raumId) return;
+  ausdehnungBerechnen();
+  jetztZeichnen();
+  $('legendeBand').hidden = raumId === 'balkon' || !baenderAn();
+  diagrammZeichnen();
+  balkenZeichnen();
+  if (infoIndex !== null) infoAnzeigen();
+}
+
+/* ============================================================
+   Einstellungen
+   ============================================================ */
+
+function einstellungenZeichnen() {
+  const s = speicherLesen(SPEICHER_SCHLUESSEL);
+  const status = $('schluesselStatus');
+  status.textContent = '';
+  if (s) {
+    const p = document.createElement('p');
+    p.textContent = 'Gespeichert ist ein Schlüssel, der auf …' + s.slice(-4) + ' endet.';
+    status.appendChild(p);
+  }
+  $('entfernen').hidden = !s;
+  $('schluesselFeld').value = '';
+  $('ergebnis').textContent = '';
+  $('ergebnis').className = 'ergebnis';
+}
+
+async function schluesselSpeichern() {
+  const feld = $('schluesselFeld'), ergebnis = $('ergebnis'), knopf = $('speichern');
+  const s = feld.value.trim();
+  if (!s) { ergebnis.textContent = 'Bitte zuerst den Schlüssel einfügen.'; ergebnis.className = 'ergebnis schlecht'; return; }
+  knopf.disabled = true;
+  ergebnis.textContent = 'Prüfe …'; ergebnis.className = 'ergebnis';
+  try {
+    const text = await verlaufHolen(s);
+    daten = csvLesen(text);
+    letzterAbruf = Date.now();
+    speicherSchreiben(SPEICHER_SCHLUESSEL, s);
+    meldungZeigen(null);
+    ergebnis.textContent = 'Funktioniert. Der Schlüssel ist gespeichert.';
+    ergebnis.className = 'ergebnis gut';
+    setTimeout(() => ansichtZeigen('liste', false), 700);
+  } catch (e) {
+    ergebnis.textContent = e.message + ' Der Schlüssel wurde nicht gespeichert.';
+    ergebnis.className = 'ergebnis schlecht';
+  } finally {
+    knopf.disabled = false;
+  }
+}
+
+/* ============================================================
+   Ansichten und Ablauf
+   ============================================================ */
+
+let ansicht = 'liste';
+
+function ansichtZeigen(neu, inGeschichte, id) {
+  ansicht = neu;
+  if (neu === 'raum') raumOeffnen(id);
+  if (inGeschichte) history.pushState({ ansicht: neu, id }, '');
+  $('ansichtListe').hidden = neu !== 'liste';
+  $('ansichtRaum').hidden = neu !== 'raum';
+  $('ansichtEinstellungen').hidden = neu !== 'einstellungen';
+  $('zurueck').hidden = neu === 'liste';
+  $('einstellungenKnopf').hidden = neu !== 'liste';
+  $('neuLaden').hidden = neu === 'einstellungen';
+  if (neu === 'liste') $('titel').textContent = 'Raumklima';
+  if (neu === 'einstellungen') { $('titel').textContent = 'Einstellungen'; einstellungenZeichnen(); }
+  window.scrollTo(0, 0);
+  allesZeichnen();
+}
+
+function allesZeichnen() {
+  kopfAktualisieren();
+  if (ansicht === 'liste') listeZeichnen();
+  if (ansicht === 'raum') raumZeichnen();
+}
+
+function zurueck() {
+  if (history.state && history.state.ansicht && history.state.ansicht !== 'liste') history.back();
+  else ansichtZeigen('liste', false);
+}
+
+window.addEventListener('popstate', (e) => {
+  const s = e.state;
+  if (s && s.ansicht === 'raum') ansichtZeigen('raum', false, s.id);
+  else if (s && s.ansicht === 'einstellungen') ansichtZeigen('einstellungen', false);
+  else ansichtZeigen('liste', false);
+});
+
+$('zurueck').addEventListener('click', zurueck);
+$('neuLaden').addEventListener('click', datenLaden);
+$('einstellungenKnopf').addEventListener('click', () => ansichtZeigen('einstellungen', true));
+$('speichern').addEventListener('click', schluesselSpeichern);
+$('schluesselFeld').addEventListener('keydown', (e) => { if (e.key === 'Enter') schluesselSpeichern(); });
+$('entfernen').addEventListener('click', () => {
+  speicherLoeschen(SPEICHER_SCHLUESSEL);
+  daten = null;
+  einstellungenZeichnen();
+  $('ergebnis').textContent = 'Schlüssel entfernt.';
+});
+$('bandSchalter').addEventListener('change', (e) => {
+  speicherSchreiben(SPEICHER_BAENDER, e.target.checked ? 'an' : 'aus');
+  raumZeichnen();
+});
+
+const diagramm = $('diagramm');
+diagramm.addEventListener('pointerdown', infoAusZeiger);
+diagramm.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' || e.buttons || e.pressure > 0) infoAusZeiger(e); });
+
+const balken = $('balken');
+balken.addEventListener('pointerdown', balkenStart);
+balken.addEventListener('pointermove', balkenZiehen);
+balken.addEventListener('pointerup', balkenEnde);
+balken.addEventListener('pointercancel', balkenEnde);
+
+// Tippen ausserhalb des Diagramms blendet den Wertekasten aus
+document.addEventListener('pointerdown', (e) => {
+  if (infoIndex !== null && !diagramm.contains(e.target)) {
+    infoIndex = null; $('info').hidden = true; diagrammZeichnen();
+  }
+});
+
+// Groesse oder Hell/Dunkel geaendert: neu zeichnen
+new ResizeObserver(() => { if (ansicht === 'raum') { diagrammZeichnen(); balkenZeichnen(); } }).observe(diagramm);
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', allesZeichnen);
+
+// Wieder sichtbar (App geoeffnet): frische Daten, wenn aelter als 1 Minute
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - letzterAbruf > 60000) datenLaden();
+});
+setInterval(() => {
+  if (document.visibilityState === 'visible') datenLaden();
+  else kopfAktualisieren();
+}, KONFIG.autoNeuLadenMs);
+// Kopf jede Minute nachfuehren (Warnung "nichts hochgeladen")
+setInterval(kopfAktualisieren, 60000);
+
+// Start
+history.replaceState({ ansicht: 'liste' }, '');
+if (speicherLesen(SPEICHER_SCHLUESSEL)) { ansichtZeigen('liste', false); datenLaden(); }
+else ansichtZeigen('einstellungen', false);
+</script>
+</body>
+</html>
