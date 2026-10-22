@@ -325,7 +325,7 @@
       </div>
       <div id="ergebnis" class="ergebnis"></div>
     </div>
-    <div class="fuss">Raumklima-App · Fassung vom 22.10.2026 (mit Glättung)</div>
+    <div class="fuss">Raumklima-App · Fassung vom 22.10.2026 (Glättung mitwachsend)</div>
   </section>
 
 </div>
@@ -352,7 +352,7 @@ const KONFIG = {
   // Glaettung der Kurven, abhaengig von der Laenge des Ausschnitts
   glattAbS:        24 * 3600,      // bis 1 Tag: gemessene Werte, ungeglaettet
   glattVollS:      72 * 3600,      // ab 3 Tagen: voll geglaettet
-  glattHalb:       2               // je 2 Werte links und rechts = 5 Werte = 1 Stunde
+  glattTeiler:     28              // Fenster = Ausschnitt / 28 (7 Tage -> 6 h, 28 Tage -> 1 Tag)
 };
 
 // Reihenfolge der Liste, wie im Konzept festgelegt
@@ -513,10 +513,7 @@ function csvLesen(text) {
       t.push(a === '' || a === undefined ? null : parseFloat(a));
       f.push(b === '' || b === undefined ? null : parseFloat(b));
     }
-    // tg und fg: geglaettete Fassungen, einmal beim Einlesen berechnet
-    raeume[r.id] = { t, f,
-                     tg: glaetten(zeiten, t, intervall),
-                     fg: glaetten(zeiten, f, intervall) };
+    raeume[r.id] = { t, f };
   }
 
   if (erstellt === null && zeiten.length) erstellt = zeiten[zeiten.length - 1] + intervall;
@@ -527,22 +524,33 @@ function csvLesen(text) {
    Glaettung
    ============================================================ */
 /*
-  Zwei Schritte, beide ueber ein gleitendes Fenster von 5 Werten
-  (der Wert selbst und je 2 davor und danach, also 1 Stunde):
+  Zwei Schritte, beide ueber ein gleitendes Fenster: der Wert
+  selbst und je k Werte davor und danach.
 
-  1. Median: Die 5 Werte werden der Groesse nach geordnet, der
-     mittlere wird genommen. Ein kurzer Einbruch beim Lueften
-     (1 bis 2 Werte) faellt dabei einfach heraus, weil er nie in
-     der Mitte der Reihe landet.
-  2. Mittelwert: Danach wird der Durchschnitt der 5 Werte
+  1. Median: Die Werte im Fenster werden der Groesse nach
+     geordnet, der mittlere wird genommen. Ein Einbruch beim
+     Lueften, der kuerzer ist als das halbe Fenster, faellt dabei
+     heraus, weil er nie in der Mitte der Reihe landet.
+  2. Mittelwert: Danach wird der Durchschnitt im Fenster
      gebildet. Das rundet die Stufen ab, die der Median
      hinterlaesst.
 
+  Die Fensterbreite waechst mit dem Ausschnitt (KONFIG.glattTeiler):
+  Fenster = Ausschnitt / 28, also bei 3 Tagen rund 2,5 Stunden,
+  bei 7 Tagen 6 Stunden, bei 28 Tagen 1 Tag. So wirkt jede
+  Zoomstufe gleich ruhig.
+
   Gerechnet wird nur innerhalb zusammenhaengender Stuecke. Eine
-  Luecke wird nie ueberbrueckt. Am Rand eines Stuecks wird das
-  Fenster beidseitig gleich verkleinert, damit die Kurve dort
-  nicht in eine Richtung verschoben wird. Der allerletzte Wert
-  bleibt so unveraendert.
+  Luecke wird nie ueberbrueckt. Am Rand eines Stuecks nimmt das
+  Fenster die Werte, die es gibt. So ist auch das Ende der Kurve
+  (die neuesten Werte) geglaettet.
+
+  Das Fenster wird "gleitend" gefuehrt: Beim Schritt zum naechsten
+  Punkt kommt rechts ein Wert dazu und links faellt einer weg.
+  Fuer den Median steht das Fenster als geordnete Liste bereit,
+  der neue Wert wird an der richtigen Stelle eingefuegt. Das ist
+  viel schneller, als fuer jeden Punkt neu zu ordnen - wichtig
+  beim Ziehen des Auswahlbalkens, wo die Breite staendig wechselt.
 */
 function stueckeOhneLuecke(zeiten, werte, iv) {
   const stuecke = [];
@@ -556,27 +564,74 @@ function stueckeOhneLuecke(zeiten, werte, iv) {
   return stuecke;
 }
 
-function fensterAnwenden(werte, stuecke, halb, median) {
+// Stelle in einer geordneten Liste, an der v hingehoert
+function stelle(liste, v) {
+  let lo = 0, hi = liste.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (liste[mid] < v) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function medianGleitend(werte, stuecke, k) {
   const aus = new Array(werte.length).fill(null);
   for (const [a, e] of stuecke) {
+    const geordnet = [];
+    let lo = a, hi = a;                     // Fenster = werte[lo .. hi-1]
     for (let i = a; i < e; i++) {
-      const k = Math.min(halb, i - a, e - 1 - i);
-      const fenster = werte.slice(i - k, i + k + 1);
-      if (median) {
-        fenster.sort((x, y) => x - y);
-        aus[i] = fenster[k];                 // die Mitte von 2k+1 Werten
-      } else {
-        aus[i] = fenster.reduce((s, v) => s + v, 0) / fenster.length;
-      }
+      const neuHi = Math.min(e, i + k + 1), neuLo = Math.max(a, i - k);
+      while (hi < neuHi) { geordnet.splice(stelle(geordnet, werte[hi]), 0, werte[hi]); hi++; }
+      while (lo < neuLo) { geordnet.splice(stelle(geordnet, werte[lo]), 1); lo++; }
+      const n = geordnet.length, m = n >> 1;
+      aus[i] = (n % 2) ? geordnet[m] : (geordnet[m - 1] + geordnet[m]) / 2;
     }
   }
   return aus;
 }
 
-function glaetten(zeiten, werte, iv) {
+function mittelGleitend(werte, stuecke, k) {
+  const aus = new Array(werte.length).fill(null);
+  for (const [a, e] of stuecke) {
+    let summe = 0, lo = a, hi = a;
+    for (let i = a; i < e; i++) {
+      const neuHi = Math.min(e, i + k + 1), neuLo = Math.max(a, i - k);
+      while (hi < neuHi) { summe += werte[hi]; hi++; }
+      while (lo < neuLo) { summe -= werte[lo]; lo++; }
+      aus[i] = summe / (hi - lo);
+    }
+  }
+  return aus;
+}
+
+function glaetten(zeiten, werte, iv, k) {
   const stuecke = stueckeOhneLuecke(zeiten, werte, iv);
-  const nachMedian = fensterAnwenden(werte, stuecke, KONFIG.glattHalb, true);
-  return fensterAnwenden(nachMedian, stuecke, KONFIG.glattHalb, false);
+  return mittelGleitend(medianGleitend(werte, stuecke, k), stuecke, k);
+}
+
+/*
+  Wie viele Werte links und rechts gehoeren zum Fenster (k)?
+  Das ganze Fenster (2k + 1 Werte) soll etwa Ausschnitt / 28 lang
+  sein. Beispiel 7 Tage: 168 h / 28 = 6 h = 24 Werte, also k = 12.
+*/
+function glattHalbFuer(spanneS) {
+  const werte = spanneS / KONFIG.glattTeiler / daten.intervall;
+  return Math.max(1, Math.round((werte - 1) / 2));
+}
+
+// Geglaettete Fassungen, gemerkt pro Raum und Fensterbreite
+let glattGemerkt = { daten: null, liste: new Map() };
+function geglaettet(id, k) {
+  if (glattGemerkt.daten !== daten) glattGemerkt = { daten, liste: new Map() };
+  const schluessel = id + '|' + k;
+  let g = glattGemerkt.liste.get(schluessel);
+  if (!g) {
+    const r = daten.raeume[id], z = daten.zeiten, iv = daten.intervall;
+    g = { t: glaetten(z, r.t, iv, k), f: glaetten(z, r.f, iv, k) };
+    if (glattGemerkt.liste.size > 80) glattGemerkt.liste.clear();
+    glattGemerkt.liste.set(schluessel, g);
+  }
+  return g;
 }
 
 /*
@@ -591,22 +646,24 @@ function glattAnteil(spanneS) {
 }
 
 /*
-  Die Werte, die als Kurve gezeichnet werden: zwischen gemessen
-  und geglaettet, je nach Anteil. Das Ergebnis wird gemerkt,
-  solange Raum, Anteil und Daten gleich bleiben.
+  Die Werte, die fuer einen Ausschnitt der Laenge spanneS als
+  Kurve gezeichnet werden: zwischen gemessen und geglaettet, je
+  nach Anteil, mit der passenden Fensterbreite. Das letzte
+  Ergebnis wird gemerkt, solange Raum, Anteil, Breite und Daten
+  gleich bleiben. Rueckgabe { t, f, anteil }.
 */
 let kurvenGemerkt = null;
-function kurvenWerte(id, anteil) {
-  const k = kurvenGemerkt;
-  if (k && k.daten === daten && k.id === id && k.anteil === anteil) return k;
+function kurvenWerte(id, spanneS) {
+  const anteil = glattAnteil(spanneS);
   const r = daten.raeume[id];
+  if (anteil === 0) return { t: r.t, f: r.f, anteil };
+  const k = glattHalbFuer(spanneS);
+  const m = kurvenGemerkt;
+  if (m && m.daten === daten && m.id === id && m.anteil === anteil && m.k === k) return m;
+  const g = geglaettet(id, k);
   const mischen = (roh, glatt) => roh.map((v, i) =>
     v === null ? null : v + anteil * (glatt[i] - v));
-  kurvenGemerkt = {
-    daten, id, anteil,
-    t: anteil === 0 ? r.t : mischen(r.t, r.tg),
-    f: anteil === 0 ? r.f : mischen(r.f, r.fg)
-  };
+  kurvenGemerkt = { daten, id, anteil, k, t: mischen(r.t, g.t), f: mischen(r.f, g.f) };
   return kurvenGemerkt;
 }
 
@@ -902,7 +959,7 @@ function diagrammZeichnen() {
   if (!daten || !ausdehnung || !fenster || !raumId) return;
 
   // r: die gezeichneten Kurven (je nach Ausschnitt geglaettet)
-  const r = kurvenWerte(raumId, glattAnteil(fenster.x1 - fenster.x0));
+  const r = kurvenWerte(raumId, fenster.x1 - fenster.x0);
   const z = daten.zeiten, iv = daten.intervall, halb = iv / 2;
   const L = RAND.links, R = b - RAND.rechts, O = RAND.oben, U = h - RAND.unten;
   const xVon = (t) => L + (t - fenster.x0) / (fenster.x1 - fenster.x0) * (R - L);
@@ -1049,8 +1106,8 @@ function infoAnzeigen() {
   // Zeile 2: die Werte der Kurve, je mit Linienmuster als Schluessel.
   // Ist geglaettet, sind das die geglaetteten Werte - sie liegen
   // genau auf der Linie, die man sieht.
-  const anteil = glattAnteil(fenster.x1 - fenster.x0);
-  const k = kurvenWerte(raumId, anteil);
+  const k = kurvenWerte(raumId, fenster.x1 - fenster.x0);
+  const anteil = k.anteil;
   const werte = document.createElement('div');
   werte.className = 'werte';
   function reihe(klasse, text) {
@@ -1139,7 +1196,7 @@ function balkenZeichnen() {
   const z = daten.zeiten, halb = daten.intervall / 2;
   const O = 6, U = h - 6;
   // Die Vorschau zeigt den ganzen Zeitraum, also gilt dessen Glaettung
-  const r = kurvenWerte(raumId, glattAnteil(ausdehnung.x1 - ausdehnung.x0));
+  const r = kurvenWerte(raumId, ausdehnung.x1 - ausdehnung.x0);
 
   // Mini-Vorschau: beide Kurven ueber die ganzen Daten, eigene Skalen
   let tMin = Infinity, tMax = -Infinity, fMin = Infinity, fMax = -Infinity;

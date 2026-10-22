@@ -46,9 +46,11 @@ Die Glättung hängt davon ab, wie lang der gewählte Ausschnitt ist:
 - ab 3 Tagen: voll geglättet
 - dazwischen nimmt die Glättung allmählich zu
 
-Geglättet wird in zwei Schritten über je 5 Werte (1 Stunde): zuerst der
+Geglättet wird in zwei Schritten über ein gleitendes Fenster: zuerst der
 Median (kurze Einbrüche beim Lüften fallen heraus), danach der Mittelwert
-(rundet die Stufen ab). Lücken werden nicht überbrückt.
+(rundet die Stufen ab). Das Fenster wächst mit dem Ausschnitt: Es ist etwa
+ein 28stel davon lang, also rund 2,5 Stunden bei 3 Tagen, 6 Stunden bei
+7 Tagen und 1 Tag bei 28 Tagen. Lücken werden nicht überbrückt.
 
 Liegt der Finger auf einer geglätteten Kurve, zeigt die App gross den Wert
 der Kurve und darunter klein den gemessenen Wert. Die aktuellen Werte
@@ -56,8 +58,8 @@ oben und in der Raumliste sind immer gemessen. Die roten Flächen werden
 immer aus den gemessenen Werten berechnet, genau wie die
 Lüftungsempfehlung auf dem Display.
 
-Die Grenzen stehen in `index.html` unter `KONFIG` (`glattAbS`,
-`glattVollS`, `glattHalb`).
+Die Einstellungen stehen in `index.html` unter `KONFIG` (`glattAbS`,
+`glattVollS`, `glattTeiler`).
 
 ## Regeln für die roten Flächen
 
