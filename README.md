@@ -38,6 +38,27 @@ Leseschlüssel steht nur im Speicher des iPhones. Falls das iPhone verloren
 geht: den Schlüssel auf GitHub unter Settings → Developer settings →
 Fine-grained tokens widerrufen.
 
+## Glättung der Kurven
+
+Die Glättung hängt davon ab, wie lang der gewählte Ausschnitt ist:
+
+- bis 1 Tag: die gemessenen Werte, ungeglättet
+- ab 3 Tagen: voll geglättet
+- dazwischen nimmt die Glättung allmählich zu
+
+Geglättet wird in zwei Schritten über je 5 Werte (1 Stunde): zuerst der
+Median (kurze Einbrüche beim Lüften fallen heraus), danach der Mittelwert
+(rundet die Stufen ab). Lücken werden nicht überbrückt.
+
+Liegt der Finger auf einer geglätteten Kurve, zeigt die App gross den Wert
+der Kurve und darunter klein den gemessenen Wert. Die aktuellen Werte
+oben und in der Raumliste sind immer gemessen. Die roten Flächen werden
+immer aus den gemessenen Werten berechnet, genau wie die
+Lüftungsempfehlung auf dem Display.
+
+Die Grenzen stehen in `index.html` unter `KONFIG` (`glattAbS`,
+`glattVollS`, `glattHalb`).
+
 ## Regeln für die roten Flächen
 
 Ein 15-Minuten-Intervall wird rot hinterlegt, wenn
